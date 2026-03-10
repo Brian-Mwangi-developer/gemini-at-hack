@@ -1,0 +1,10 @@
+fastapi==0.135.1
+pydantic==2.12.5
+langgraph==1.0.10
+langchain-google-genai==4.2.1
+langchain-exa==1.0.0
+langchain==1.2.10
+exa-py>=1.16.0
+langsmith>=0.1.0
+python-dotenv>=1.0.0
+uvicorn>=0.30.0
