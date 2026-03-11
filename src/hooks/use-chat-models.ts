@@ -1,5 +1,5 @@
 import { fetcher } from "@/lib/utils";
-import { appStore } from "@/store";
+import { appStore, resolveCouncilModels } from "@/store";
 import useSWR, { SWRConfiguration } from "swr";
 
 export const useChatModels = (options?: SWRConfiguration) => {
@@ -9,6 +9,7 @@ export const useChatModels = (options?: SWRConfiguration) => {
             hasAPIKey: boolean;
             models: {
                 name: string;
+                displayName:string;
                 isToolCallSupported: boolean;
             }[];
         }[]
@@ -22,6 +23,16 @@ export const useChatModels = (options?: SWRConfiguration) => {
                 const firstProvider = data[0].provider;
                 const model = data[0].models[0].name;
                 appStore.setState({ chatModel: { provider: firstProvider, model } });
+            }
+            // If council was persisted but keys are now missing, auto-disable
+            if (status.modelCouncil) {
+                const result = resolveCouncilModels(data);
+                if (!result.ok) {
+                    appStore.setState({ modelCouncil: false, activeModels: [] });
+                } else {
+                    // Re-sync active models to only those with valid keys
+                    appStore.setState({ activeModels: result.models });
+                }
             }
         },
         ...options

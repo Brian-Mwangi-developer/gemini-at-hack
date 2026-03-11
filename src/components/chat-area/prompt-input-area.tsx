@@ -9,6 +9,7 @@ import { useShallow } from "zustand/shallow";
 import { Button } from "../ui/button";
 import { GeminiIcon } from "../ui/gemini-icon";
 import { SelectModel } from "./select-model";
+import { DeepResearchdropdown } from "./deep-research-view";
 
 
 interface ChatboxProps {
@@ -21,10 +22,12 @@ interface ChatboxProps {
 
 
 export const PromptInputArea = ({ input, setInput, isLoading, onStop, sendMessage }: ChatboxProps) => {
-    const [globalModel, appStoreMutate] = appStore(
+    const [globalModel, appStoreMutate, modelCouncil, activeModels] = appStore(
         useShallow((state) => [
             state.chatModel,
-            state.mutate
+            state.mutate,
+            state.modelCouncil,
+            state.activeModels,
         ])
     )
     const chatModel = globalModel;
@@ -58,7 +61,7 @@ export const PromptInputArea = ({ input, setInput, isLoading, onStop, sendMessag
                             <div className="flex w-full items-center gap-1 z-30">
                                 {
                                     <>
-                                        tools
+                                        <DeepResearchdropdown/>
                                     </>
                                 }
                                 <div className="flex-1" />
@@ -69,7 +72,17 @@ export const PromptInputArea = ({ input, setInput, isLoading, onStop, sendMessag
                                         className="rounded-full group data-[state=open]:bg-muted hover:bg-muted gap-1.5 px-2"
                                         data-testid="model-selector-button"
                                     >
-                                        {chatModel?.model ? (
+                                        {modelCouncil && activeModels.length > 0 ? (
+                                            <>
+                                                <GeminiIcon className="size-3 text-primary" />
+                                                <span
+                                                    className="text-sm text-foreground"
+                                                    data-testid="selected-model-name"
+                                                >
+                                                    {activeModels.length} models
+                                                </span>
+                                            </>
+                                        ) : chatModel?.model ? (
                                             <>
                                                 <GeminiIcon className="size-3" />
                                                 <span

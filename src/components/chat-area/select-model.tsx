@@ -2,16 +2,16 @@
 
 import { useChatModels } from "@/hooks/use-chat-models";
 import { cn } from "@/lib/utils";
+import { appStore } from "@/store";
 import { ChatModel } from "@/types/chat";
-import { CheckIcon, ChevronDown } from "lucide-react";
-import { Fragment, memo, PropsWithChildren, useState } from "react";
+import { ChevronDown } from "lucide-react";
+import { Fragment, memo, PropsWithChildren, useCallback, useState } from "react";
+import { useShallow } from "zustand/shallow";
 import { Button } from "../ui/button";
-import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList, CommandSeparator } from "../ui/command";
+import { Command, CommandEmpty, CommandGroup, CommandItem, CommandList, CommandSeparator } from "../ui/command";
 import { ModelProviderIcon } from "../ui/model-provider-icon";
 import { Popover, PopoverContent, PopoverTrigger } from "../ui/popover";
-
-
-
+import { Switch } from "../ui/switch";
 
 interface Props {
     onSelect: (model: ChatModel) => void;
@@ -22,6 +22,26 @@ export const SelectModel = (props: PropsWithChildren<Props>) => {
     const [open, setOpen] = useState(false);
     const { data: providers } = useChatModels();
     const [model, setModel] = useState(props.currentModel);
+    const [activeModels, mutate] = appStore(
+        useShallow((s) => [s.activeModels, s.mutate])
+    );
+
+    const isModelActive = useCallback(
+        (provider: string, name: string) =>
+            activeModels.some((m) => m.provider === provider && m.model === name),
+        [activeModels]
+    );
+
+    const handleModelToggle = useCallback(
+        (provider: string, name: string, checked: boolean) => {
+            const updated = checked
+                ? [...activeModels, { provider, model: name }]
+                : activeModels.filter((m) => !(m.provider === provider && m.model === name));
+            mutate({ activeModels: updated });
+        },
+        [activeModels, mutate]
+    );
+
     return (
         <Popover open={open} onOpenChange={setOpen}>
             <PopoverTrigger asChild>
@@ -40,15 +60,15 @@ export const SelectModel = (props: PropsWithChildren<Props>) => {
                 )}
             </PopoverTrigger>
             <PopoverContent
-                className="p-0 w-70"
+                className="p-0 w-80"
                 align={"end"}
                 data-testid="model-selector-popover">
                 <Command
-                    className="rounded-lg relative shadow-md h-80"
+                    className="rounded-lg relative shadow-md"
                     value={JSON.stringify(model)}
                     onClick={(e) => e.stopPropagation()}
                 >
-                    <CommandList className="p-2">
+                    <CommandList className="p-2 max-h-96 overflow-y-auto">
                         <CommandEmpty>No results found.</CommandEmpty>
                         {providers?.map((provider, i) => (
                             <Fragment key={provider.provider}>
@@ -68,42 +88,48 @@ export const SelectModel = (props: PropsWithChildren<Props>) => {
                                     }}
                                     data-testid={`model-provider-${provider.provider}`}
                                 >
-                                    {provider.models.map((item) => (
-                                        <CommandItem
-                                            key={item.name}
-                                            disabled={!provider.hasAPIKey}
-                                            className="cursor-pointer"
-                                            onSelect={() => {
-                                                setModel({
-                                                    provider: provider.provider,
-                                                    model: item.name,
-                                                });
-                                                props.onSelect({
-                                                    provider: provider.provider,
-                                                    model: item.name,
-                                                });
-                                                setOpen(false);
-                                            }}
-                                            value={item.name}
-                                            data-testid={`model-option-${provider.provider}-${item.name}`}
-                                        >
-                                            {model?.provider === provider.provider &&
-                                                model?.model === item.name ? (
-                                                <CheckIcon
-                                                    className="size-3"
-                                                    data-testid="selected-model-check"
-                                                />
-                                            ) : (
-                                                <div className="ml-3" />
-                                            )}
-                                            <span className="pr-2">{item.name}</span>
-                                            {!item.isToolCallSupported && (
-                                                <div className="ml-auto flex items-center gap-1 text-xs text-muted-foreground">
-                                                    No tools
+                                    {provider.models.map((item) => {
+                                        const active = isModelActive(provider.provider, item.name);
+                                        return (
+                                            <CommandItem
+                                                key={item.name}
+                                                disabled={!provider.hasAPIKey}
+                                                className="cursor-pointer flex items-center px-3 py-2 h-auto gap-2"
+                                                onSelect={() => {
+                                                    setModel({
+                                                        provider: provider.provider,
+                                                        model: item.name,
+                                                    });
+                                                    props.onSelect({
+                                                        provider: provider.provider,
+                                                        model: item.name,
+                                                    });
+                                                    setOpen(false);
+                                                }}
+                                                value={item.name}
+                                                data-testid={`model-option-${provider.provider}-${item.name}`}
+                                            >
+                                                <span className={cn(
+                                                    "text-sm flex-1 truncate",
+                                                    active ? "text-foreground" : "text-muted-foreground"
+                                                )}>
+                                                    {item.displayName || item.name}
+                                                </span>
+                                                <div
+                                                    className="shrink-0"
+                                                    onClick={(e) => e.stopPropagation()}
+                                                >
+                                                    <Switch
+                                                        checked={active}
+                                                        onCheckedChange={(checked) =>
+                                                            handleModelToggle(provider.provider, item.name, checked)
+                                                        }
+                                                        disabled={!provider.hasAPIKey}
+                                                    />
                                                 </div>
-                                            )}
-                                        </CommandItem>
-                                    ))}
+                                            </CommandItem>
+                                        );
+                                    })}
                                 </CommandGroup>
                                 {i < providers?.length - 1 && <CommandSeparator />}
                             </Fragment>
@@ -112,10 +138,8 @@ export const SelectModel = (props: PropsWithChildren<Props>) => {
                 </Command>
             </PopoverContent>
         </Popover>
-    )
-}
-
-
+    );
+};
 
 const ProviderHeader = memo(function ProviderHeader({
     provider,
@@ -131,13 +155,11 @@ const ProviderHeader = memo(function ProviderHeader({
             ) : (
                 <ModelProviderIcon provider={provider} className="size-3" />
             )}
-            {provider}
+            <span className="capitalize">{provider}</span>
             {!hasAPIKey && (
-                <>
-                    <span className="text-xs ml-auto text-muted-foreground">
-                        No API Key
-                    </span>
-                </>
+                <span className="text-xs ml-auto text-muted-foreground">
+                    No API Key
+                </span>
             )}
         </div>
     );
