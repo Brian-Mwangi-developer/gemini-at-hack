@@ -55,9 +55,38 @@ def _parse_json_response(text: str) -> dict:
 # Intake Node
 # ---------------------------------------------------------------------------
 
-def intake_node(state: ResearchState) -> Command[Literal["plan_search", "clarify"]]:
+def intake_node(state: ResearchState) -> Command[Literal["plan_search", "clarify", "council_dispatch"]]:
     """Analyze the user's research query and decide whether to search or clarify."""
     llm = _get_llm()
+
+    # If council mode, skip clarification — always search. Then route to council_dispatch.
+    council_on = state.get("council_mode")
+    print(f"[intake] council_mode={council_on}  council_models={[m.get('model','?') for m in state.get('council_models', [])]}")
+    if council_on:
+        system = SystemMessage(content=(
+            "You are a research planning assistant. Analyze the user's research query. "
+            "Produce 3-5 focused search queries that will help answer it comprehensively. "
+            "Respond ONLY with a JSON object:\n"
+            '{"queries": ["query1", "query2", ...]}\n'
+            "Respond with valid JSON only, no markdown."
+        ))
+        messages = [system] + state["messages"]
+        response = llm.invoke(messages)
+        content = _extract_text(response.content)
+
+        try:
+            parsed = _parse_json_response(content)
+            queries = parsed.get("queries", [state["research_query"]])
+        except (json.JSONDecodeError, ValueError):
+            queries = [state["research_query"]]
+
+        return Command(
+            update={
+                "search_queries": queries,
+                "messages": [AIMessage(content=f"Council mode: planning search with queries: {queries}")],
+            },
+            goto="council_dispatch",
+        )
 
     system = SystemMessage(content=(
         "You are a research planning assistant. Analyze the user's research query. "

@@ -4,9 +4,9 @@ import { persist } from "zustand/middleware";
 
 // Desired council models (one per provider)
 export const COUNCIL_MODELS: ChatModel[] = [
-    { provider: "google", model: "gemini-3.1-pro" },
-    { provider: "openai", model: "gpt-4o" },
-    { provider: "anthropic", model: "claude-opus-4-5" },
+    { provider: "google", model: "gemini-3.1-pro-preview" },
+    { provider: "openai", model: "gpt-5.2" },
+    { provider: "anthropic", model: "claude-sonnet-4-6" },
 ];
 
 export interface ProviderInfo {

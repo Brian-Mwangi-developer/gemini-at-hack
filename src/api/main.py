@@ -17,6 +17,7 @@ from pydantic import BaseModel
 
 from research_agent.graph import build_research_graph
 from research_agent.state import ResearchState
+from research_agent.council import MODEL_DISPLAY_NAMES, PROVIDER_ICONS
 
 # Load env from the project root (.env.local is where Next.js stores keys)
 _project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -44,6 +45,8 @@ NODE_LABELS = {
     "analyze_results": "Analyzing Results",
     "reflect": "Evaluating Answer Quality",
     "synthesize": "Writing Final Answer",
+    "council_dispatch": "Running Model Council",
+    "council_synthesize": "Synthesizing Findings",
 }
 
 
@@ -118,6 +121,15 @@ async def chat_endpoint(request: Request):
     thread_id = body.get("threadId") or str(uuid.uuid4())
     config = RunnableConfig(configurable={"thread_id": thread_id})
 
+    # Council mode
+    council_mode = body.get("modelCouncil", False)
+    active_models = body.get("activeModels", [])
+
+    # ── Council logging ──────────────────────────────────────────────────
+    model_keys = [f"{m.get('provider','?')}/{m.get('model','?')}" for m in active_models] if active_models else []
+    print(f"[council] thread={thread_id[:8]}  council_mode={council_mode}  models={model_keys}")
+    if council_mode and not active_models:
+        print(f"[council] WARNING: council_mode=True but no activeModels received!")
    
     resume_value = None
     for msg in reversed(messages):
@@ -179,17 +191,19 @@ async def chat_endpoint(request: Request):
                     "max_iterations": 3,
                     "errors": [],
                     "final_answer": "",
+                    "council_mode": council_mode,
+                    "council_models": active_models if council_mode else [],
+                    "council_results": {},
+                    "council_synthesized_answer": "",
                 }
 
             async for chunk in _stream_graph(graph, stream_input, config):
                 for node_name, update in chunk.items():
                     if node_name == "__interrupt__":
                         # ── Interrupt → ask_clarification tool (no output) ──
-                        # update can be a list/tuple of Interrupt objects
                         interrupt_info = None
                         if isinstance(update, (list, tuple)) and len(update) > 0:
                             item = update[0]
-                            # LangGraph Interrupt has a .value attribute
                             if hasattr(item, "value"):
                                 interrupt_info = item.value
                             else:
@@ -199,7 +213,6 @@ async def chat_endpoint(request: Request):
                         else:
                             interrupt_info = update
 
-                        # Extract the actual question text
                         if isinstance(interrupt_info, dict):
                             question = interrupt_info.get("question", str(interrupt_info))
                         else:
@@ -220,8 +233,136 @@ async def chat_endpoint(request: Request):
                                 "input": {"question": question},
                             }
                         )
-                        # Deliberately no tool-output-available — the
-                        # frontend will show an input box for the user.
+
+                    elif node_name == "council_dispatch" and isinstance(update, dict):
+                        # ── Council dispatch: emit per-model agent cards ──
+                        council_results = update.get("council_results", {})
+
+                       
+                        dispatch_id = f"tc-step-{uuid.uuid4()}"
+                        yield _sse(
+                            {
+                                "type": "tool-input-start",
+                                "toolCallId": dispatch_id,
+                                "toolName": "agent_step",
+                            }
+                        )
+                        yield _sse(
+                            {
+                                "type": "tool-input-available",
+                                "toolCallId": dispatch_id,
+                                "toolName": "agent_step",
+                                "input": {
+                                    "node": "council_dispatch",
+                                    "label": "Running Model Council",
+                                },
+                            }
+                        )
+                        yield _sse(
+                            {
+                                "type": "tool-output-available",
+                                "toolCallId": dispatch_id,
+                                "output": {
+                                    "status": "completed",
+                                    "detail": f"{len(council_results)} models completed",
+                                },
+                            }
+                        )
+
+                        for model_key, result in council_results.items():
+                            agent_id = f"tc-council-{uuid.uuid4()}"
+                            display_name = result.get("display_name", model_key)
+                            provider = result.get("provider", "unknown")
+                            steps = result.get("steps", [])
+                            draft = result.get("draft_answer", "")
+                            cites = result.get("citations", [])
+                            errors = result.get("errors", [])
+
+                            yield _sse(
+                                {
+                                    "type": "tool-input-start",
+                                    "toolCallId": agent_id,
+                                    "toolName": "council_agent",
+                                }
+                            )
+                            yield _sse(
+                                {
+                                    "type": "tool-input-available",
+                                    "toolCallId": agent_id,
+                                    "toolName": "council_agent",
+                                    "input": {
+                                        "model_key": model_key,
+                                        "display_name": display_name,
+                                        "provider": provider,
+                                        "icon": PROVIDER_ICONS.get(provider, "?"),
+                                    },
+                                }
+                            )
+                            yield _sse(
+                                {
+                                    "type": "tool-output-available",
+                                    "toolCallId": agent_id,
+                                    "output": {
+                                        "status": "completed",
+                                        "steps": steps,
+                                        "step_count": len(steps),
+                                        "draft_answer": draft,
+                                        "citations": cites,
+                                        "errors": errors,
+                                    },
+                                }
+                            )
+
+                    elif node_name == "council_synthesize" and isinstance(update, dict):
+                        # ── Council synthesize: emit synthesis step + stream text ──
+                        synth_id = f"tc-step-{uuid.uuid4()}"
+                        yield _sse(
+                            {
+                                "type": "tool-input-start",
+                                "toolCallId": synth_id,
+                                "toolName": "agent_step",
+                            }
+                        )
+                        yield _sse(
+                            {
+                                "type": "tool-input-available",
+                                "toolCallId": synth_id,
+                                "toolName": "agent_step",
+                                "input": {
+                                    "node": "council_synthesize",
+                                    "label": "Synthesizing Findings",
+                                },
+                            }
+                        )
+                        yield _sse(
+                            {
+                                "type": "tool-output-available",
+                                "toolCallId": synth_id,
+                                "output": {
+                                    "status": "completed",
+                                    "detail": "Consensus analysis complete",
+                                },
+                            }
+                        )
+
+                        final_answer = update.get("final_answer", "")
+                        if final_answer:
+                            text_id = f"txt-{uuid.uuid4()}"
+                            yield _sse(
+                                {"type": "text-start", "id": text_id}
+                            )
+                            chunk_size = 12
+                            for i in range(0, len(final_answer), chunk_size):
+                                yield _sse(
+                                    {
+                                        "type": "text-delta",
+                                        "id": text_id,
+                                        "delta": final_answer[i : i + chunk_size],
+                                    }
+                                )
+                                await asyncio.sleep(0.01)
+                            yield _sse({"type": "text-end", "id": text_id})
+
                     else:
                         # Skip the clarify node — it is always followed
                         # by an __interrupt__ that becomes ask_clarification.
@@ -251,7 +392,6 @@ async def chat_endpoint(request: Request):
                             }
                         )
 
-                
                         detail = ""
                         if isinstance(update, dict):
                             if node_name == "execute_search":
@@ -345,7 +485,7 @@ class ResumeRequest(BaseModel):
     thread_id: str
     user_input: str
 
-
+# to be used with Terminal Testing of the app
 @app.post("/research")
 async def start_research(req: ResearchRequest):
     """Start a new research session."""
@@ -353,7 +493,7 @@ async def start_research(req: ResearchRequest):
     config = RunnableConfig(configurable={"thread_id": thread_id})
 
     initial_state: ResearchState = {
-        "messages": [{"role": "user", "content": req.query}],
+        "messages": [{"role": "user", "content": req.query}], # type: ignore[]
         "research_query": req.query,
         "search_queries": [],
         "search_results": [],
@@ -458,7 +598,7 @@ def run_terminal():
         config = RunnableConfig(configurable={"thread_id": thread_id})
 
         initial_state: ResearchState = {
-            "messages": [{"role": "user", "content": query}],
+            "messages": [{"role": "user", "content": query}],  # type: ignore[not Assignable to ResearchState]
             "research_query": query,
             "search_queries": [],
             "search_results": [],
@@ -475,7 +615,7 @@ def run_terminal():
             f"\n--- Starting research (thread: {thread_id[:8]}...) ---", "info")
 
         try:
-            # Stream node updates so user sees progress
+            # Stream node updates 
             for chunk in graph.stream(initial_state, config, stream_mode="updates"):
                 for node_name, update in chunk.items():
                     if node_name == "__interrupt__":

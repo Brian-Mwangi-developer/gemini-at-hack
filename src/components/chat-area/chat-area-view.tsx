@@ -1,6 +1,7 @@
 "use client";
 
 import { cn } from "@/lib/utils";
+import { appStore } from "@/store";
 import { useChat } from '@ai-sdk/react';
 import { DefaultChatTransport, UIMessage } from "ai";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -14,12 +15,23 @@ interface Props {
 
 
 export const ChatAreaView = ({ threadId, initialMessages }: Props) => {
-    const [transport] = useState(
+    // body is a function so it's evaluated at send-time, not construction-time.
+    // The Chat instance inside useChat is only created once per `id`, so a
+    // static body would go stale when council mode is toggled.
+    const transport = useMemo(
         () =>
             new DefaultChatTransport({
                 api: "/api/chat",
-                body: { threadId },
+                body: () => {
+                    const s = appStore.getState();
+                    return {
+                        threadId,
+                        modelCouncil: s.modelCouncil,
+                        activeModels: s.modelCouncil ? s.activeModels : [],
+                    };
+                },
             }),
+        [threadId],
     );
     const {
         messages,
