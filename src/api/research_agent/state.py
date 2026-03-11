@@ -43,6 +43,15 @@ class ResearchState(TypedDict):
     # Final synthesized answer
     final_answer: str
 
+    # ── Council mode fields ──────────────────────────────────────────────
+    council_mode: bool
+    # List of {"provider": str, "model": str} for each council agent
+    council_models: list[dict]
+    # Per-model results: {model_display_name: {draft, citations, steps, ...}}
+    council_results: dict
+    # The final council synthesis (agreement/disagreement/unique tables + report)
+    council_synthesized_answer: str
+
 
 class SearchSubgraphState(TypedDict):
     """State for the search subgraph."""

@@ -14,6 +14,11 @@ import { Check, ChevronDown, ChevronUp, Copy, Info } from "lucide-react";
 import { memo, useCallback, useRef, useState } from "react";
 import { AgentSteps, type AgentStep } from "./agent-steps";
 import { ClarificationInput } from "./clarification-input";
+import {
+    CouncilAgentCard,
+    CouncilSynthesisCard,
+    type CouncilAgentData,
+} from "./council-agent-card";
 import { MarkdownContent } from "./markdown-content";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
@@ -255,22 +260,44 @@ const PurePreviewMessage = ({
     const rawSteps: AgentStep[] = [];
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     let clarificationPart: any = null;
+    const councilAgents: CouncilAgentData[] = [];
+    let hasCouncilSynthesisRunning = false;
 
     for (const part of parts) {
-        // AI SDK v6: tool parts have type "tool-{toolName}" (e.g. "tool-agent_step")
+        
         if (part.type.startsWith("tool-")) {
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
             const p = part as any;
             const toolName = p.type.split("-").slice(1).join("-");
             if (toolName === "agent_step") {
+                const node = (p.input?.node ?? p.args?.node ?? "") as string;
+                // Track if council_synthesize is still running
+                if (node === "council_synthesize" && p.state !== "output-available") {
+                    hasCouncilSynthesisRunning = true;
+                }
                 rawSteps.push({
-                    node: (p.input?.node ?? p.args?.node ?? "") as string,
+                    node,
                     label: (p.input?.label ?? p.args?.label ?? p.input?.node ?? "Processing") as string,
                     status: p.state === "output-available" ? "completed" : "running",
                     detail: p.state === "output-available" ? ((p.output?.detail ?? "") as string) : "",
                 });
             } else if (toolName === "ask_clarification") {
                 clarificationPart = p;
+            } else if (toolName === "council_agent") {
+                const input = p.input ?? p.args ?? {};
+                const output = p.output ?? {};
+                councilAgents.push({
+                    model_key: (input.model_key ?? "") as string,
+                    display_name: (input.display_name ?? input.model_key ?? "") as string,
+                    provider: (input.provider ?? "unknown") as string,
+                    icon: (input.icon ?? "?") as string,
+                    status: p.state === "output-available" ? "completed" : "running",
+                    steps: (output.steps ?? []) as CouncilAgentData["steps"],
+                    step_count: (output.step_count ?? 0) as number,
+                    draft_answer: (output.draft_answer ?? "") as string,
+                    citations: (output.citations ?? []) as CouncilAgentData["citations"],
+                    errors: (output.errors ?? []) as string[],
+                });
             }
         }
     }
@@ -306,6 +333,29 @@ const PurePreviewMessage = ({
                 ) : (
                     <>
                         {agentSteps.length > 0 && <AgentSteps steps={agentSteps} />}
+
+                        {/* Council agent cards */}
+                        {councilAgents.length > 0 && (
+                            <div className="flex flex-col gap-3">
+                                {councilAgents.map((agent) => (
+                                    <CouncilAgentCard
+                                        key={agent.model_key}
+                                        agent={agent}
+                                    />
+                                ))}
+                                <CouncilSynthesisCard
+                                    isRunning={
+                                        hasCouncilSynthesisRunning ||
+                                        (councilAgents.length > 0 &&
+                                            councilAgents.every(
+                                                (a) => a.status === "completed"
+                                            ) &&
+                                            textParts.length === 0 &&
+                                            isStreaming)
+                                    }
+                                />
+                            </div>
+                        )}
 
                         {clarificationPart &&
                             (clarificationPart.state === "output-available" ? (
