@@ -45,6 +45,23 @@ export const ChatAreaView = ({ threadId, initialMessages }: Props) => {
         transport,
     });
 
+    const prevStatusRef = useRef(status);
+    useEffect(() => {
+        const wasStreaming =
+            prevStatusRef.current === "streaming" ||
+            prevStatusRef.current === "submitted";
+        const isReady = status === "ready";
+        prevStatusRef.current = status;
+
+        if (wasStreaming && isReady && messages.length > 0) {
+            fetch(`/api/chats/${threadId}`, {
+                method: "PUT",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ messages }),
+            }).catch(console.error);
+        }
+    }, [status, messages, threadId]);
+
     const handleClarificationSubmit = useCallback(
         (toolCallId: string, output: string) => {
             addToolOutput({
@@ -109,6 +126,7 @@ export const ChatAreaView = ({ threadId, initialMessages }: Props) => {
                 setInput={setInput}
                 isLoading={isLoading}
                 onStop={stop}
+                hasMessages={messages.length > 0}
             />
         </>
     )

@@ -1,4 +1,21 @@
 services:
+  postgres:
+    image: postgres:16-alpine
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: gemigraph
+      POSTGRES_PASSWORD: gemigraph
+      POSTGRES_DB: gemigraph
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U gemigraph"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+
   nextjs:
     build:
       context: .
@@ -7,10 +24,13 @@ services:
       - "3000:3000"
     environment:
       - FASTAPI_URL=http://fastapi:8000
+      - DATABASE_URL=postgresql://gemigraph:gemigraph@postgres:5432/gemigraph
     env_file:
       - .env
     depends_on:
       fastapi:
+        condition: service_healthy
+      postgres:
         condition: service_healthy
     restart: unless-stopped
 
@@ -20,21 +40,42 @@ services:
       dockerfile: Dockerfile.fastapi
     ports:
       - "8000:8000"
-    environment:
-      - GOOGLE_API_KEY=${GOOGLE_API_KEY}
-      - EXA_API_KEY=${EXA_API_KEY}
-      - OPENAI_API_KEY=${OPENAI_API_KEY}
-      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
-      - LANGSMITH_KEY=${LANGSMITH_KEY}
-      - LANGCHAIN_API_KEY=${LANGSMITH_KEY}
-      - LANGCHAIN_TRACING_V2=true
-      - LANGCHAIN_PROJECT=${LANGCHAIN_PROJECT:-gemigraph-research-agent}
     env_file:
       - .env
+    environment:
+      - LANGCHAIN_TRACING_V2=true
+      - LANGCHAIN_PROJECT=${LANGCHAIN_PROJECT:-gemigraph-research-agent}
+      - NEXTJS_INTERNAL_URL=http://nextjs:3000
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')",
+        ]
       interval: 10s
       timeout: 5s
       retries: 3
       start_period: 15s
     restart: unless-stopped
+
+  # Run with:  docker compose --profile tunnel up -d
+  # The public URL is printed in the logs:  docker compose logs tunnel
+  tunnel:
+    image: cloudflare/cloudflared:latest
+    command: tunnel --no-autoupdate --url http://nextjs:3000
+    depends_on:
+      - nextjs
+    profiles:
+      - tunnel
+    restart: unless-stopped
+    networks:
+      - default
+
+volumes:
+  pgdata:
+
+networks:
+  default:
+    driver: bridge

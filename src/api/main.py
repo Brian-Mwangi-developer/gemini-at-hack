@@ -10,19 +10,16 @@ from contextlib import asynccontextmanager
 from dotenv import load_dotenv
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from langchain_core.runnables import RunnableConfig
 from langgraph.types import Command
 from pydantic import BaseModel
-
+from research_agent.council import MODEL_DISPLAY_NAMES, PROVIDER_ICONS
 from research_agent.graph import build_research_graph
 from research_agent.state import ResearchState
-from research_agent.council import MODEL_DISPLAY_NAMES, PROVIDER_ICONS
 
-# Load env from the project root (.env.local is where Next.js stores keys)
 _project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-load_dotenv(os.path.join(_project_root, ".env.local"))
-load_dotenv(os.path.join(_project_root, ".env"))  # fallback
+load_dotenv(os.path.join(_project_root, ".env"))
 
 # ── LangSmith Tracing ─────────────────────────────────────────────────────
 _langsmith_key = os.environ.get("LANGSMITH_KEY") or os.environ.get("LANGCHAIN_API_KEY")
@@ -553,8 +550,237 @@ async def health():
 
 
 # ---------------------------------------------------------------------------
-# Interactive Terminal CLI
+# SMS via Africa's Talking
 # ---------------------------------------------------------------------------
+
+import africastalking
+
+_at_username = os.environ.get("AT_NAME")
+_at_api_key = os.environ.get("AT_KEY")
+_at_sender_name = os.environ.get("AT_SENDER_NAME")
+
+if _at_username and _at_api_key:
+    africastalking.initialize(_at_username, _at_api_key)
+    _at_sms = africastalking.SMS
+    print(f"[africastalking] Initialized — username={_at_username}")
+else:
+    _at_sms = None
+    print("[africastalking] AT_NAME / AT_KEY not set — SMS disabled")
+
+
+class SendSmsRequest(BaseModel):
+    phoneNumber: str
+    chatUrl: str
+
+
+@app.post("/send-sms")
+async def send_sms(req: SendSmsRequest):
+    """Send an SMS with the research chat URL."""
+    if not _at_sms:
+        return JSONResponse({"message": "SMS service not configured (missing AT_NAME / AT_KEY)"}, status_code=500)
+
+    phone = req.phoneNumber.strip()
+    if not phone or not phone.startswith("+"):
+        return JSONResponse({"message": "Phone number must start with + and country code"}, status_code=400)
+
+    message = f"Here is your Research:\n{req.chatUrl}"
+
+    try:
+        response = _at_sms.send(
+            message=message,
+            recipients=[phone],
+            **({"sender_id": _at_sender_name} if _at_sender_name else {})
+        )
+        print(f"[sms] Sent to {phone}: {response}")
+        return {"status": "success", "data": response}
+    except Exception as e:
+        print(f"[sms] Error sending to {phone}: {e}")
+        return JSONResponse({"message": f"Failed to send SMS: {str(e)}"}, status_code=500)
+
+
+# ---------------------------------------------------------------------------
+# SMS Callback — two-way research via SMS
+# ---------------------------------------------------------------------------
+# Maps phone number → {"thread_id": str, "status": "pending"|"awaiting_clarification"|"complete"}
+_sms_sessions: dict[str, dict] = {}
+
+_app_base_url = os.environ.get("NEXT_PUBLIC_APP_URL", "http://localhost:3000")
+_nextjs_internal_url = os.environ.get("NEXTJS_INTERNAL_URL", "http://localhost:3000")
+
+
+def _save_chat_to_db(thread_id: str, query: str, answer: str):
+    """Save the SMS research result to the Next.js chats API so the URL works."""
+    import urllib.request
+    messages = [
+        {"id": f"user-{uuid.uuid4()}", "role": "user", "parts": [{"type": "text", "text": query}]},
+        {"id": f"asst-{uuid.uuid4()}", "role": "assistant", "parts": [{"type": "text", "text": answer}]},
+    ]
+    payload = json.dumps({"messages": messages}).encode()
+    url = f"{_nextjs_internal_url}/api/chats/{thread_id}"
+    req = urllib.request.Request(url, data=payload, headers={"Content-Type": "application/json"}, method="PUT")
+    try:
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            print(f"[sms-cb] Saved chat {thread_id[:8]} to DB — {resp.status}")
+    except Exception as e:
+        print(f"[sms-cb] Failed to save chat {thread_id[:8]}: {e}")
+
+
+def _send_sms_sync(to: str, message: str):
+    """Fire-and-forget SMS send (call from a thread)."""
+    if not _at_sms:
+        print(f"[sms-cb] SMS disabled — would send to {to}: {message[:80]}")
+        return
+    try:
+        resp = _at_sms.send(message=message, recipients=[to], sender_id=_at_sender_name)
+        print(f"[sms-cb] Sent to {to}: {resp}")
+    except Exception as e:
+        print(f"[sms-cb] Failed to send to {to}: {e}")
+
+
+async def _run_sms_research(phone: str, query: str, thread_id: str):
+    """Run the research graph in the background for an SMS user."""
+    config = RunnableConfig(configurable={"thread_id": thread_id})
+
+    initial_state: ResearchState = {
+        "messages": [{"role": "user", "content": query}],  # type: ignore
+        "research_query": query,
+        "search_queries": [],
+        "search_results": [],
+        "draft_answer": "",
+        "citations": [],
+        "reflection": "",
+        "iteration_count": 0,
+        "max_iterations": 3,
+        "errors": [],
+        "final_answer": "",
+        "council_mode": False,
+        "council_models": [],
+        "council_results": {},
+        "council_synthesized_answer": "",
+    }
+
+    try:
+        result = await asyncio.to_thread(graph.invoke, initial_state, config)
+
+        if "__interrupt__" in result:
+            interrupt_info = result["__interrupt__"][0].value
+            question = interrupt_info.get("question", str(interrupt_info))
+            _sms_sessions[phone]["status"] = "awaiting_clarification"
+            await asyncio.to_thread(
+                _send_sms_sync, phone,
+                f"GemiGraph needs more info for your research (ID: {thread_id[:8]}):\n\n{question}\n\nReply with your answer.",
+            )
+            return
+
+        # Research complete — save to DB and notify
+        final_answer = result.get("final_answer", "") or result.get("draft_answer", "")
+        _sms_sessions[phone]["status"] = "complete"
+        await asyncio.to_thread(_save_chat_to_db, thread_id, query, final_answer)
+        chat_url = f"{_app_base_url}/chat/{thread_id}"
+        await asyncio.to_thread(
+            _send_sms_sync, phone,
+            f"Your Research is Complete!\n\nView it here:\n{chat_url}",
+        )
+    except Exception as e:
+        print(f"[sms-cb] Research failed for {phone}: {e}")
+        _sms_sessions[phone]["status"] = "complete"
+        await asyncio.to_thread(
+            _send_sms_sync, phone,
+            f"Sorry, your research encountered an error. Please try again.",
+        )
+
+
+async def _resume_sms_research(phone: str, user_input: str, thread_id: str):
+    """Resume a research graph after the user replies to a clarification SMS."""
+    config = RunnableConfig(configurable={"thread_id": thread_id})
+    _sms_sessions[phone]["status"] = "pending"
+
+    try:
+        result = await asyncio.to_thread(
+            graph.invoke, Command(resume=user_input), config
+        )
+
+        if "__interrupt__" in result:
+            interrupt_info = result["__interrupt__"][0].value
+            question = interrupt_info.get("question", str(interrupt_info))
+            _sms_sessions[phone]["status"] = "awaiting_clarification"
+            await asyncio.to_thread(
+                _send_sms_sync, phone,
+                f"GemiGraph needs more info (ID: {thread_id[:8]}):\n\n{question}\n\nReply with your answer.",
+            )
+            return
+
+        final_answer = result.get("final_answer", "") or result.get("draft_answer", "")
+        _sms_sessions[phone]["status"] = "complete"
+        query = _sms_sessions[phone].get("query", "SMS Research")
+        await asyncio.to_thread(_save_chat_to_db, thread_id, query, final_answer)
+        chat_url = f"{_app_base_url}/chat/{thread_id}"
+        await asyncio.to_thread(
+            _send_sms_sync, phone,
+            f"Your Research is Complete!\n\nView it here:\n{chat_url}",
+        )
+    except Exception as e:
+        print(f"[sms-cb] Resume failed for {phone}: {e}")
+        _sms_sessions[phone]["status"] = "complete"
+        await asyncio.to_thread(
+            _send_sms_sync, phone,
+            f"Sorry, your research encountered an error. Please try again.",
+        )
+
+
+@app.post("/sms-callback")
+async def sms_callback(request: Request):
+    """Africa's Talking incoming SMS callback.
+
+    Flow:
+    1. New SMS from a number → start research, reply with "pending" message.
+    2. If agent needs clarification → send question via SMS.
+    3. User replies → resume agent with their answer.
+    4. On completion → send the research URL via SMS.
+    """
+    # AT sends form-encoded data
+    form = await request.form()
+    text = form.get("text", "")
+    sender = form.get("from", "")
+
+    if not text or not sender:
+        return JSONResponse({"error": "Missing text or from"}, status_code=400)
+
+    text = str(text).strip()
+    sender = str(sender).strip()
+    print(f"[sms-cb] Incoming from {sender}: {text[:100]}")
+
+    if not _at_sms:
+        print("[sms-cb] SMS service not configured — cannot respond")
+        return {"status": "received", "note": "SMS service disabled"}
+
+    session = _sms_sessions.get(sender)
+
+    # ── Resuming an existing conversation that asked for clarification ──
+    if session and session["status"] == "awaiting_clarification":
+        thread_id = session["thread_id"]
+        print(f"[sms-cb] Resuming thread {thread_id[:8]} for {sender}")
+
+        await asyncio.to_thread(
+            _send_sms_sync, sender,
+            f"Thanks! Continuing your research (ID: {thread_id[:8]})...",
+        )
+
+        asyncio.create_task(_resume_sms_research(sender, text, thread_id))
+        return {"status": "resuming", "thread_id": thread_id}
+
+    # ── New research request ──
+    thread_id = str(uuid.uuid4())
+    _sms_sessions[sender] = {"thread_id": thread_id, "status": "pending", "query": text}
+    print(f"[sms-cb] New research thread={thread_id[:8]} for {sender}: {text[:80]}")
+
+    await asyncio.to_thread(
+        _send_sms_sync, sender,
+        f"Your Research is Pending (ID: {thread_id[:8]}).\n\nWe're working on it and will send you the results shortly.",
+    )
+
+    asyncio.create_task(_run_sms_research(sender, text, thread_id))
+    return {"status": "started", "thread_id": thread_id}
 
 def _print_step(text: str, style: str = "info"):
     colors = {

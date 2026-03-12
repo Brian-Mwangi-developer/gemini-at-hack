@@ -2,27 +2,37 @@
 
 import { Button } from "@/components/ui/button";
 import {
+    Dialog,
+    DialogContent,
+    DialogHeader,
+    DialogTitle,
+} from "@/components/ui/dialog";
+import {
     DropdownMenu,
     DropdownMenuContent,
     DropdownMenuGroup,
     DropdownMenuItem,
     DropdownMenuLabel,
+    DropdownMenuSeparator,
     DropdownMenuTrigger
 } from "@/components/ui/dropdown-menu";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { useChatModels } from "@/hooks/use-chat-models";
 import { appStore, COUNCIL_MODELS } from "@/store";
-import { IconAlertTriangle, IconPlus, IconSparkles } from '@tabler/icons-react';
+import { IconAlertTriangle, IconMessageForward, IconPlus, IconSparkles } from '@tabler/icons-react';
 import { useState } from "react";
+import { toast } from "sonner";
 import { useShallow } from "zustand/shallow";
+import { PhoneLookupInput } from "./phone-lookup-input";
 
-export function DeepResearchdropdown() {
+export function DeepResearchdropdown({ hasMessages }: { hasMessages?: boolean }) {
     const [modelCouncil, toggleModelCouncil] = appStore(
         useShallow((s) => [s.modelCouncil, s.toggleModelCouncil])
     );
     const { data: providers } = useChatModels();
     const [errorOpen, setErrorOpen] = useState(false);
     const [missingProviders, setMissingProviders] = useState<string[]>([]);
+    const [smsDialogOpen, setSmsDialogOpen] = useState(false);
 
     const handleToggle = () => {
         const result = toggleModelCouncil(providers);
@@ -55,6 +65,23 @@ export function DeepResearchdropdown() {
                             {modelCouncil && (
                                 <span className="ml-auto text-xs text-primary">Active</span>
                             )}
+                        </DropdownMenuItem>
+                        <DropdownMenuSeparator />
+                        <DropdownMenuLabel>Share</DropdownMenuLabel>
+                        <DropdownMenuItem
+                            onClick={() => {
+                                if (!hasMessages) {
+                                    toast.error(
+                                        "You can only send SMS of a completed research",
+                                    );
+                                    return;
+                                }
+                                setSmsDialogOpen(true);
+                            }}
+                            className="cursor-pointer"
+                        >
+                            <IconMessageForward className={hasMessages ? "" : "text-muted-foreground"} />
+                            Send via SMS
                         </DropdownMenuItem>
                     </DropdownMenuGroup>
                 </DropdownMenuContent>
@@ -108,6 +135,15 @@ export function DeepResearchdropdown() {
                     Model council
                 </button>
             )}
+
+            <Dialog open={smsDialogOpen} onOpenChange={setSmsDialogOpen}>
+                <DialogContent className="sm:max-w-md">
+                    <DialogHeader>
+                        <DialogTitle>Send Research via SMS</DialogTitle>
+                    </DialogHeader>
+                    <PhoneLookupInput onClose={() => setSmsDialogOpen(false)} />
+                </DialogContent>
+            </Dialog>
         </div>
     );
 }

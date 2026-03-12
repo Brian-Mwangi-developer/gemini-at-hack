@@ -17,11 +17,12 @@ interface ChatboxProps {
     setInput: (value: string) => void;
     onStop: () => void;
     isLoading?: boolean;
+    hasMessages?: boolean;
     sendMessage: UseChatHelpers<UIMessage>["sendMessage"];
 }
 
 
-export const PromptInputArea = ({ input, setInput, isLoading, onStop, sendMessage }: ChatboxProps) => {
+export const PromptInputArea = ({ input, setInput, isLoading, onStop, sendMessage, hasMessages }: ChatboxProps) => {
     const [globalModel, appStoreMutate, modelCouncil, activeModels] = appStore(
         useShallow((state) => [
             state.chatModel,
@@ -61,7 +62,7 @@ export const PromptInputArea = ({ input, setInput, isLoading, onStop, sendMessag
                             <div className="flex w-full items-center gap-1 z-30">
                                 {
                                     <>
-                                        <DeepResearchdropdown/>
+                                        <DeepResearchdropdown hasMessages={hasMessages}/>
                                     </>
                                 }
                                 <div className="flex-1" />

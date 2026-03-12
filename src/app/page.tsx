@@ -10,7 +10,7 @@ export default function Home() {
           <CardTitle className="text-3xl font-bold text-center">
             Welcome to Gemigraph
           </CardTitle>
-          <p className="text-center text-sm text-muted-foreground">Explore Intelligent Agents powered by Gemini and Langgraph</p>
+          <p className="text-center text-sm text-muted-foreground">Explore Intelligent Agents powered by Gemini and Langgraph and Africastalking</p>
         </CardHeader>
         <CardContent className="space-y-6">
           <p className="text-center">
