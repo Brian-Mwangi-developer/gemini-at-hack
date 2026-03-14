@@ -955,8 +955,7 @@ def run_terminal():
         config = RunnableConfig(configurable={"thread_id": thread_id})
 
         initial_state: ResearchState = {
-            # type: ignore[not Assignable to ResearchState]
-            "messages": [{"role": "user", "content": query}],
+            "messages": [{"role": "user", "content": query}],# type: ignore[not Assignable to ResearchState]
             "research_query": query,
             "search_queries": [],
             "search_results": [],
