@@ -1,5 +1,6 @@
 """Research Agent — FastAPI server + interactive terminal CLI."""
 
+import africastalking
 import asyncio
 import json
 import os
@@ -11,23 +12,29 @@ from dotenv import load_dotenv
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
+from langchain_core.messages import HumanMessage
 from langchain_core.runnables import RunnableConfig
+from langchain_google_genai import ChatGoogleGenerativeAI
 from langgraph.types import Command
 from pydantic import BaseModel
 from research_agent.council import MODEL_DISPLAY_NAMES, PROVIDER_ICONS
 from research_agent.graph import build_research_graph
 from research_agent.state import ResearchState
 
-_project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+_project_root = os.path.dirname(os.path.dirname(
+    os.path.dirname(os.path.abspath(__file__))))
 load_dotenv(os.path.join(_project_root, ".env"))
 
 # ── LangSmith Tracing ─────────────────────────────────────────────────────
-_langsmith_key = os.environ.get("LANGSMITH_KEY") or os.environ.get("LANGCHAIN_API_KEY")
+_langsmith_key = os.environ.get(
+    "LANGSMITH_KEY") or os.environ.get("LANGCHAIN_API_KEY")
 if _langsmith_key:
     os.environ.setdefault("LANGCHAIN_TRACING_V2", "true")
     os.environ.setdefault("LANGCHAIN_API_KEY", _langsmith_key)
-    os.environ.setdefault("LANGCHAIN_PROJECT", os.environ.get("LANGCHAIN_PROJECT", "gemigraph-research-agent"))
-    print(f"[langsmith] Tracing enabled → project={os.environ['LANGCHAIN_PROJECT']}")
+    os.environ.setdefault("LANGCHAIN_PROJECT", os.environ.get(
+        "LANGCHAIN_PROJECT", "gemigraph-research-agent"))
+    print(
+        f"[langsmith] Tracing enabled → project={os.environ['LANGCHAIN_PROJECT']}")
 else:
     print("[langsmith] LANGSMITH_KEY / LANGCHAIN_API_KEY not set — tracing disabled")
 
@@ -99,8 +106,6 @@ app.add_middleware(
 )
 
 
-
-
 @app.post("/chat")
 async def chat_endpoint(request: Request):
     """Handle chat from the Next.js frontend using the AI SDK Data Stream
@@ -123,11 +128,13 @@ async def chat_endpoint(request: Request):
     active_models = body.get("activeModels", [])
 
     # ── Council logging ──────────────────────────────────────────────────
-    model_keys = [f"{m.get('provider','?')}/{m.get('model','?')}" for m in active_models] if active_models else []
-    print(f"[council] thread={thread_id[:8]}  council_mode={council_mode}  models={model_keys}")
+    model_keys = [
+        f"{m.get('provider', '?')}/{m.get('model', '?')}" for m in active_models] if active_models else []
+    print(
+        f"[council] thread={thread_id[:8]}  council_mode={council_mode}  models={model_keys}")
     if council_mode and not active_models:
         print(f"[council] WARNING: council_mode=True but no activeModels received!")
-   
+
     resume_value = None
     for msg in reversed(messages):
         if msg.get("role") != "assistant":
@@ -146,17 +153,20 @@ async def chat_endpoint(request: Request):
                 break
         break
 
-    last_asst = next((m for m in reversed(messages) if m.get('role') == 'assistant'), None)
+    last_asst = next((m for m in reversed(messages)
+                     if m.get('role') == 'assistant'), None)
     if last_asst:
         part_summary = []
         for p in last_asst.get('parts', []):
             if isinstance(p, dict):
-                part_summary.append(f"{p.get('type','?')}[state={p.get('state','?')}, toolName={p.get('toolName','?')}]")
-        print(f"[chat] thread={thread_id[:8]}  resume={'YES: ' + repr(resume_value[:60]) if resume_value else 'NO'}  parts={part_summary}")
+                part_summary.append(
+                    f"{p.get('type', '?')}[state={p.get('state', '?')}, toolName={p.get('toolName', '?')}]")
+        print(
+            f"[chat] thread={thread_id[:8]}  resume={'YES: ' + repr(resume_value[:60]) if resume_value else 'NO'}  parts={part_summary}")
     else:
-        print(f"[chat] thread={thread_id[:8]}  resume={'YES: ' + repr(resume_value[:60]) if resume_value else 'NO'}  (no assistant msg)")
+        print(
+            f"[chat] thread={thread_id[:8]}  resume={'YES: ' + repr(resume_value[:60]) if resume_value else 'NO'}  (no assistant msg)")
 
-    
     user_query = ""
     for msg in reversed(messages):
         if msg.get("role") == "user":
@@ -172,7 +182,7 @@ async def chat_endpoint(request: Request):
         yield _sse({"type": "start-step"})
 
         try:
-           
+
             if resume_value is not None:
                 stream_input = Command(resume=resume_value)
             else:
@@ -211,7 +221,8 @@ async def chat_endpoint(request: Request):
                             interrupt_info = update
 
                         if isinstance(interrupt_info, dict):
-                            question = interrupt_info.get("question", str(interrupt_info))
+                            question = interrupt_info.get(
+                                "question", str(interrupt_info))
                         else:
                             question = str(interrupt_info)
                         tc_id = f"tc-clarify-{uuid.uuid4()}"
@@ -235,7 +246,6 @@ async def chat_endpoint(request: Request):
                         # ── Council dispatch: emit per-model agent cards ──
                         council_results = update.get("council_results", {})
 
-                       
                         dispatch_id = f"tc-step-{uuid.uuid4()}"
                         yield _sse(
                             {
@@ -268,7 +278,8 @@ async def chat_endpoint(request: Request):
 
                         for model_key, result in council_results.items():
                             agent_id = f"tc-council-{uuid.uuid4()}"
-                            display_name = result.get("display_name", model_key)
+                            display_name = result.get(
+                                "display_name", model_key)
                             provider = result.get("provider", "unknown")
                             steps = result.get("steps", [])
                             draft = result.get("draft_answer", "")
@@ -354,7 +365,7 @@ async def chat_endpoint(request: Request):
                                     {
                                         "type": "text-delta",
                                         "id": text_id,
-                                        "delta": final_answer[i : i + chunk_size],
+                                        "delta": final_answer[i: i + chunk_size],
                                     }
                                 )
                                 await asyncio.sleep(0.01)
@@ -441,7 +452,7 @@ async def chat_endpoint(request: Request):
                                         "type": "text-delta",
                                         "id": text_id,
                                         "delta": final_answer[
-                                            i : i + chunk_size
+                                            i: i + chunk_size
                                         ],
                                     }
                                 )
@@ -471,8 +482,6 @@ async def chat_endpoint(request: Request):
     )
 
 
-
-
 class ResearchRequest(BaseModel):
     query: str
     thread_id: str | None = None
@@ -483,6 +492,8 @@ class ResumeRequest(BaseModel):
     user_input: str
 
 # to be used with Terminal Testing of the app
+
+
 @app.post("/research")
 async def start_research(req: ResearchRequest):
     """Start a new research session."""
@@ -490,7 +501,7 @@ async def start_research(req: ResearchRequest):
     config = RunnableConfig(configurable={"thread_id": thread_id})
 
     initial_state: ResearchState = {
-        "messages": [{"role": "user", "content": req.query}], # type: ignore[]
+        "messages": [{"role": "user", "content": req.query}],  # type: ignore[]
         "research_query": req.query,
         "search_queries": [],
         "search_results": [],
@@ -549,12 +560,6 @@ async def health():
     return {"status": "ok"}
 
 
-# ---------------------------------------------------------------------------
-# SMS via Africa's Talking
-# ---------------------------------------------------------------------------
-
-import africastalking
-
 _at_username = os.environ.get("AT_NAME")
 _at_api_key = os.environ.get("AT_KEY")
 _at_sender_name = os.environ.get("AT_SENDER_NAME")
@@ -598,26 +603,134 @@ async def send_sms(req: SendSmsRequest):
         return JSONResponse({"message": f"Failed to send SMS: {str(e)}"}, status_code=500)
 
 
-# ---------------------------------------------------------------------------
-# SMS Callback — two-way research via SMS
-# ---------------------------------------------------------------------------
 # Maps phone number → {"thread_id": str, "status": "pending"|"awaiting_clarification"|"complete"}
 _sms_sessions: dict[str, dict] = {}
 
 _app_base_url = os.environ.get("NEXT_PUBLIC_APP_URL", "http://localhost:3000")
-_nextjs_internal_url = os.environ.get("NEXTJS_INTERNAL_URL", "http://localhost:3000")
+_nextjs_internal_url = os.environ.get(
+    "NEXTJS_INTERNAL_URL", "http://localhost:3000")
+
+
+# SMS
+
+_sms_llm = ChatGoogleGenerativeAI(model="gemini-2.0-flash", temperature=0.7)
+
+
+def _generate_pending_message(user_query: str) -> str:
+    """Generate an engaging, conversational 'research pending' message."""
+    prompt = f"""You are a friendly AI research assistant. A user just asked: "{user_query}"
+
+Generate a SHORT, conversational SMS message (max 160 characters) that acknowledges their query and tells them you're looking into it. Make it sound like YOU are actually researching and will get back to them. Be specific about what you'll look for based on their query.
+
+Examples of good tone:
+- "Looking up the best options for that. Will send you insights in a moment!"
+- "Digging into details on that topic. Sending findings shortly!"
+- "Let me research that for you. You'll have answers soon!"
+
+ONLY respond with the message text, nothing else."""
+
+    try:
+        result = _sms_llm.invoke([HumanMessage(content=prompt)])
+
+        if isinstance(result.content, list):
+            text = ''.join([str(c) if isinstance(c, str) else c.get(
+                'text', '') for c in result.content])
+        else:
+            text = result.content
+        message = text.strip() if text else ""
+        return message[:160]
+    except Exception as e:
+        print(f"[sms-prompt] Failed to generate pending message: {e}")
+        return "Looking into your research query. You'll hear from me shortly!"
+
+
+def _generate_summary(answer: str, user_query: str = "") -> str:
+    """Extract the actual answer from research and format it for SMS.
+
+    Strategy:
+    - If extracted info (contacts, prices, facts) fits in ~2 SMS (~300 chars), return it directly.
+    - If too long, give top 2-3 results + "& more at link."
+    - NEVER say "check the link" without giving at least one concrete fact.
+    """
+    prompt = f"""You are an SMS response expert. A user sent this query via SMS: "{user_query}"
+
+Here is the research answer:
+{answer[:1200]}
+
+YOUR JOB:
+1. Read the research answer carefully and find the EXACT information the user asked for.
+2. If the user asked for contacts/phone numbers/addresses: list them directly (name + number, one per line).
+3. If the user asked for prices: list them directly.
+4. If the user asked a factual question: answer it in 1-2 sentences.
+5. Your response will be sent as SMS. Keep it under 580 characters TOTAL (fits ~4 SMS messages).
+6.  Cover ALL items the user asked about. If multiple products, give top 2 stores/prices per item."
+7.If you still cannot fit everything, summarize tightly and end with but you must atleast give an answer that make user want to click the link "& more at link."
+8. DO NOT say "check the link" without first giving at least one real answer to users question.
+
+9. DO NOT add preamble like "Here are the results" — just give the data.
+10. Format as: Store: Product - KSh Price (one per line).
+11. Format contacts as: Name: 0700000000 (one per line).
+
+Respond with ONLY the SMS text, nothing else."""
+
+    try:
+        result = _sms_llm.invoke([HumanMessage(content=prompt)])
+        if isinstance(result.content, list):
+            text = ''.join([str(c) if isinstance(c, str) else c.get(
+                'text', '') for c in result.content])
+        else:
+            text = result.content
+        summary = text.strip() if text else ""
+        return summary[:600]
+    except Exception as e:
+        print(f"[sms-prompt] Failed to generate summary: {e}")
+        return "Got your research results. Check the link for details."
+
+
+def _generate_completion_message(summary: str, chat_url: str) -> str:
+    """Append the chat URL to the summary. Always include both data + link."""
+    print(f"[CHAT_URL]: The Chat url is: {chat_url}")
+    return f"{summary}\n\n{chat_url}"
+
+
+def _generate_clarification_ack(question: str) -> str:
+    """Generate a conversational acknowledgment message for clarification request."""
+    prompt = f"""You are a friendly AI research assistant asking for clarification.
+The user asked something, and you need a detail from them. Generate a SHORT, conversational
+SMS message (max 160 characters) that acknowledges you received their message and are asking for a clarification.
+Make it feel natural and engaging, like: "Got it! Just to narrow it down..."
+
+Clarification question: {question}
+
+ONLY respond with the message text, nothing else."""
+
+    try:
+        result = _sms_llm.invoke([HumanMessage(content=prompt)])
+        if isinstance(result.content, list):
+            text = ''.join([str(c) if isinstance(c, str) else c.get(
+                'text', '') for c in result.content])
+        else:
+            text = result.content
+        message = text.strip() if text else ""
+        return message[:160]
+    except Exception as e:
+        print(f"[sms-prompt] Failed to generate clarification ack: {e}")
+        return "Got your message! Need one more detail..."
 
 
 def _save_chat_to_db(thread_id: str, query: str, answer: str):
     """Save the SMS research result to the Next.js chats API so the URL works."""
     import urllib.request
     messages = [
-        {"id": f"user-{uuid.uuid4()}", "role": "user", "parts": [{"type": "text", "text": query}]},
-        {"id": f"asst-{uuid.uuid4()}", "role": "assistant", "parts": [{"type": "text", "text": answer}]},
+        {"id": f"user-{uuid.uuid4()}", "role": "user",
+         "parts": [{"type": "text", "text": query}]},
+        {"id": f"asst-{uuid.uuid4()}", "role": "assistant",
+         "parts": [{"type": "text", "text": answer}]},
     ]
     payload = json.dumps({"messages": messages}).encode()
     url = f"{_nextjs_internal_url}/api/chats/{thread_id}"
-    req = urllib.request.Request(url, data=payload, headers={"Content-Type": "application/json"}, method="PUT")
+    req = urllib.request.Request(url, data=payload, headers={
+                                 "Content-Type": "application/json"}, method="PUT")
     try:
         with urllib.request.urlopen(req, timeout=10) as resp:
             print(f"[sms-cb] Saved chat {thread_id[:8]} to DB — {resp.status}")
@@ -631,7 +744,8 @@ def _send_sms_sync(to: str, message: str):
         print(f"[sms-cb] SMS disabled — would send to {to}: {message[:80]}")
         return
     try:
-        resp = _at_sms.send(message=message, recipients=[to], sender_id=_at_sender_name)
+        resp = _at_sms.send(message=message, recipients=[
+                            to], sender_id=_at_sender_name)
         print(f"[sms-cb] Sent to {to}: {resp}")
     except Exception as e:
         print(f"[sms-cb] Failed to send to {to}: {e}")
@@ -666,20 +780,26 @@ async def _run_sms_research(phone: str, query: str, thread_id: str):
             interrupt_info = result["__interrupt__"][0].value
             question = interrupt_info.get("question", str(interrupt_info))
             _sms_sessions[phone]["status"] = "awaiting_clarification"
+
+            ack_message = await asyncio.to_thread(_generate_clarification_ack, question)
             await asyncio.to_thread(
                 _send_sms_sync, phone,
-                f"GemiGraph needs more info for your research (ID: {thread_id[:8]}):\n\n{question}\n\nReply with your answer.",
+                f"{ack_message}\n\n{question}",
             )
             return
 
         # Research complete — save to DB and notify
-        final_answer = result.get("final_answer", "") or result.get("draft_answer", "")
+        final_answer = result.get(
+            "final_answer", "") or result.get("draft_answer", "")
         _sms_sessions[phone]["status"] = "complete"
         await asyncio.to_thread(_save_chat_to_db, thread_id, query, final_answer)
         chat_url = f"{_app_base_url}/chat/{thread_id}"
+
+        summary = await asyncio.to_thread(_generate_summary, final_answer, query)
+        completion_msg = await asyncio.to_thread(_generate_completion_message, summary, chat_url)
         await asyncio.to_thread(
             _send_sms_sync, phone,
-            f"Your Research is Complete!\n\nView it here:\n{chat_url}",
+            completion_msg,
         )
     except Exception as e:
         print(f"[sms-cb] Research failed for {phone}: {e}")
@@ -704,20 +824,26 @@ async def _resume_sms_research(phone: str, user_input: str, thread_id: str):
             interrupt_info = result["__interrupt__"][0].value
             question = interrupt_info.get("question", str(interrupt_info))
             _sms_sessions[phone]["status"] = "awaiting_clarification"
+
+            ack_message = await asyncio.to_thread(_generate_clarification_ack, question)
             await asyncio.to_thread(
                 _send_sms_sync, phone,
-                f"GemiGraph needs more info (ID: {thread_id[:8]}):\n\n{question}\n\nReply with your answer.",
+                f"{ack_message}\n\n{question}",
             )
             return
 
-        final_answer = result.get("final_answer", "") or result.get("draft_answer", "")
+        final_answer = result.get(
+            "final_answer", "") or result.get("draft_answer", "")
         _sms_sessions[phone]["status"] = "complete"
         query = _sms_sessions[phone].get("query", "SMS Research")
         await asyncio.to_thread(_save_chat_to_db, thread_id, query, final_answer)
         chat_url = f"{_app_base_url}/chat/{thread_id}"
+        summary = await asyncio.to_thread(_generate_summary, final_answer, query)
+        completion_msg = await asyncio.to_thread(_generate_completion_message, summary, chat_url)
+        print(f"[Chat_URL] the Url is:{chat_url}")
         await asyncio.to_thread(
             _send_sms_sync, phone,
-            f"Your Research is Complete!\n\nView it here:\n{chat_url}",
+            completion_msg,
         )
     except Exception as e:
         print(f"[sms-cb] Resume failed for {phone}: {e}")
@@ -761,9 +887,10 @@ async def sms_callback(request: Request):
         thread_id = session["thread_id"]
         print(f"[sms-cb] Resuming thread {thread_id[:8]} for {sender}")
 
+        confirmation = "Got it! Processing your answer..."
         await asyncio.to_thread(
             _send_sms_sync, sender,
-            f"Thanks! Continuing your research (ID: {thread_id[:8]})...",
+            confirmation,
         )
 
         asyncio.create_task(_resume_sms_research(sender, text, thread_id))
@@ -771,16 +898,20 @@ async def sms_callback(request: Request):
 
     # ── New research request ──
     thread_id = str(uuid.uuid4())
-    _sms_sessions[sender] = {"thread_id": thread_id, "status": "pending", "query": text}
-    print(f"[sms-cb] New research thread={thread_id[:8]} for {sender}: {text[:80]}")
+    _sms_sessions[sender] = {"thread_id": thread_id,
+                             "status": "pending", "query": text}
+    print(
+        f"[sms-cb] New research thread={thread_id[:8]} for {sender}: {text[:80]}")
 
+    pending_msg = await asyncio.to_thread(_generate_pending_message, text)
     await asyncio.to_thread(
         _send_sms_sync, sender,
-        f"Your Research is Pending (ID: {thread_id[:8]}).\n\nWe're working on it and will send you the results shortly.",
+        pending_msg,
     )
 
     asyncio.create_task(_run_sms_research(sender, text, thread_id))
     return {"status": "started", "thread_id": thread_id}
+
 
 def _print_step(text: str, style: str = "info"):
     colors = {
@@ -824,7 +955,8 @@ def run_terminal():
         config = RunnableConfig(configurable={"thread_id": thread_id})
 
         initial_state: ResearchState = {
-            "messages": [{"role": "user", "content": query}],  # type: ignore[not Assignable to ResearchState]
+            # type: ignore[not Assignable to ResearchState]
+            "messages": [{"role": "user", "content": query}],
             "research_query": query,
             "search_queries": [],
             "search_results": [],
@@ -841,7 +973,7 @@ def run_terminal():
             f"\n--- Starting research (thread: {thread_id[:8]}...) ---", "info")
 
         try:
-            # Stream node updates 
+            # Stream node updates
             for chunk in graph.stream(initial_state, config, stream_mode="updates"):
                 for node_name, update in chunk.items():
                     if node_name == "__interrupt__":
@@ -859,7 +991,6 @@ def run_terminal():
                             _print_step("Research cancelled.", "error")
                             break
 
-                        
                         for resume_chunk in graph.stream(
                             Command(resume=user_input), config, stream_mode="updates"
                         ):
